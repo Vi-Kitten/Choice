@@ -2,6 +2,13 @@
 name = "exclusive-choice"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+description = "An implementation of affine addative conjunction in the rust type system."
+repository = "https://github.com/Vi-Kitten/Choice"
+readme = "README.md"
+keywords = ["linear", "choice", "exclusive"]
+categories = []
+rust-version = "1.77.1"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
