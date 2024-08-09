@@ -118,7 +118,7 @@ impl<A, B> DynChoice<A, B> for Box<dyn DynChoice<A, B>> {
 impl<I: Iterator<Item = Either<A, B>>, A, B>
     DynChoice<LeftFilterIter<I, A, B>, RightFilterIter<I, A, B>> for I
 {
-    /// Create an iterator that filters for left.
+    /// Creates an iterator that filters for left.
     fn into_left(self: Box<Self>) -> LeftFilterIter<I, A, B> {
         LeftFilterIter {
             iter: *self,
@@ -127,7 +127,7 @@ impl<I: Iterator<Item = Either<A, B>>, A, B>
         }
     }
 
-    /// Create an iterator that filters for right.
+    /// Creates an iterator that filters for right.
     fn into_right(self: Box<Self>) -> RightFilterIter<I, A, B> {
         RightFilterIter {
             iter: *self,
@@ -316,12 +316,12 @@ impl<A, B> Either<A, B> {
     }
 
     /// Sets the left branch from a result assuming `Ok`, otherwise if `Err` sets the right branch instead.
-    pub fn left_from(result: Result<A, B>) -> Either<A, B> {
+    pub fn ok_into_left(result: Result<A, B>) -> Either<A, B> {
         result.map_or_else(Either::Right, Either::Left)
     }
 
     /// Sets the right branch from a result assuming `Ok`, otherwise if `Err` sets the left branch instead.
-    pub fn right_from(result: Result<B, A>) -> Either<A, B> {
+    pub fn ok_into_right(result: Result<B, A>) -> Either<A, B> {
         result.map_or_else(Either::Left, Either::Right)
     }
 
