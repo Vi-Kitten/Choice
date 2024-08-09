@@ -2,90 +2,87 @@ pub mod derivatives;
 use derivatives::*;
 
 /// Dynamism bootstrapper for Choice
-pub trait DynChoice<A, B> {
+pub trait DynChoice {
+    type Left;
+    type Right;
     /// Convert into `A`
-    fn into_left(self: Box<Self>) -> A;
+    fn into_left(self: Box<Self>) -> Self::Left;
 
     /// Convert into `B`
-    fn into_right(self: Box<Self>) -> B;
+    fn into_right(self: Box<Self>) -> Self::Right;
 }
 
 /// Represents the affine negation of `Either`.
 ///
 /// It represents a conjunctive union.
-pub trait Choice<A, B>: DynChoice<A, B> + Sized {
+pub trait Choice: DynChoice + Sized {
     /// Convert into `A`
-    fn left(self: Self) -> A;
+    fn left(self: Self) -> Self::Left;
     /// Convert into `B`
-    fn right(self: Self) -> B;
+    fn right(self: Self) -> Self::Right;
 
     /// Maps the left value.
     ///
     /// This treats Choice as a functor in the left type.
-    fn map_left<C, F: FnOnce(A) -> C>(
+    fn map_left<C, F: FnOnce(Self::Left) -> C>(
         self,
         left: F,
-    ) -> ChooseMap<Self, Both<F, fn(B) -> B>, A, B, F, fn(B) -> B> {
+    ) -> ChooseMap<Self, Both<F, fn(Self::Right) -> Self::Right>> {
         self.map_both(left, std::convert::identity)
     }
 
     /// Maps the right value.
     ///
     /// This treats Choice as a functor in the right type.
-    fn map_right<C, G: FnOnce(B) -> C>(
+    fn map_right<C, G: FnOnce(Self::Right) -> C>(
         self,
         right: G,
-    ) -> ChooseMap<Self, Both<fn(A) -> A, G>, A, B, fn(A) -> A, G> {
+    ) -> ChooseMap<Self, Both<fn(Self::Left) -> Self::Left, G>> {
         self.map_both(std::convert::identity, right)
     }
 
     /// Maps both values.
     ///
     /// This treats Choice as a functor in both the left and right types.
-    fn map_both<C, D, F: FnOnce(A) -> C, G: FnOnce(B) -> D>(
+    fn map_both<C, D, F: FnOnce(Self::Left) -> C, G: FnOnce(Self::Right) -> D>(
         self,
         left: F,
         right: G,
-    ) -> ChooseMap<Self, Both<F, G>, A, B, F, G> {
+    ) -> ChooseMap<Self, Both<F, G>> {
         self.choose_map(Both::new(left, right))
     }
 
     /// Composes a choice of values with a choice of functions to produce a choice of values.
     ///
     /// This sequences the choices in a way that is unique to the structure of a choice.
-    fn choose_map<U: Choice<F, G>, C, D, F: FnOnce(A) -> C, G: FnOnce(B) -> D>(
-        self,
-        choice: U,
-    ) -> ChooseMap<Self, U, A, B, F, G> {
+    fn choose_map<U: Choice, C, D>(self, choice: U) -> ChooseMap<Self, U>
+    where
+        U::Left: FnOnce(Self::Left) -> C,
+        U::Right: FnOnce(Self::Right) -> D,
+    {
         ChooseMap {
             choice: self,
             other: choice,
-            _l: std::marker::PhantomData,
-            _r: std::marker::PhantomData,
-            _f: std::marker::PhantomData,
-            _g: std::marker::PhantomData,
         }
     }
 
     /// Sets the left value to a map from the current state to be ran if chosen.
     ///
     /// This treats Choice as a co-monad in the left type.
-    fn cobind_left<C, F: FnOnce(Self) -> C>(self, left: F) -> LeftCoBind<Self, A, F> {
+    fn cobind_left<C, F: FnOnce(Self) -> C>(self, left: F) -> LeftCoBind<Self, F> {
         LeftCoBind {
             choice: self,
             cobind: left,
-            _l: std::marker::PhantomData,
         }
     }
 
     /// Sets the right value to a map from the current state to be ran if chosen.
     ///
     /// This treats Choice as a co-monad in the right type.
-    fn cobind_right<C, G: FnOnce(Self) -> C>(self, right: G) -> RightCoBind<Self, A, G> {
+    fn cobind_right<C, G: FnOnce(Self) -> C>(self, right: G) -> RightCoBind<Self, G> {
         RightCoBind {
             choice: self,
             cobind: right,
-            _r: std::marker::PhantomData,
         }
     }
 
@@ -97,7 +94,10 @@ pub trait Choice<A, B>: DynChoice<A, B> + Sized {
     /// Composes a choice of values with an either of functions to produce a single value.
     ///
     /// The composition of a choice with its linear negative annihilates both.
-    fn choose<C, F: FnOnce(A) -> C, G: FnOnce(B) -> C>(self, either: Either<F, G>) -> C {
+    fn choose<C, F: FnOnce(Self::Left) -> C, G: FnOnce(Self::Right) -> C>(
+        self,
+        either: Either<F, G>,
+    ) -> C {
         match either {
             Either::Left(f) => (f)(self.left()),
             Either::Right(g) => (g)(self.right()),
@@ -105,7 +105,10 @@ pub trait Choice<A, B>: DynChoice<A, B> + Sized {
     }
 }
 
-impl<A, B> DynChoice<A, B> for Box<dyn DynChoice<A, B>> {
+impl<A, B> DynChoice for Box<dyn DynChoice<Left = A, Right = B>> {
+    type Left = A;
+    type Right = B;
+
     fn into_left(self: Box<Self>) -> A {
         (*self).into_left()
     }
@@ -115,13 +118,26 @@ impl<A, B> DynChoice<A, B> for Box<dyn DynChoice<A, B>> {
     }
 }
 
-impl<I: Iterator<Item = Either<A, B>>, A, B>
-    DynChoice<LeftFilterIter<I, A, B>, RightFilterIter<I, A, B>> for I
-{
+/// A choice between filterning eithers by branch.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
+pub struct IterChoice<I> {
+    iter: I,
+}
+
+impl<I> IterChoice<I> {
+    pub fn new(iter: I) -> IterChoice<I> {
+        IterChoice { iter }
+    }
+}
+
+impl<I: Iterator<Item = Either<A, B>>, A, B> DynChoice for IterChoice<I> {
+    type Left = LeftFilterIter<I, A, B>;
+    type Right = RightFilterIter<I, A, B>;
+
     /// Creates an iterator that filters for left.
     fn into_left(self: Box<Self>) -> LeftFilterIter<I, A, B> {
         LeftFilterIter {
-            iter: *self,
+            iter: self.iter,
             _l: std::marker::PhantomData,
             _r: std::marker::PhantomData,
         }
@@ -130,24 +146,30 @@ impl<I: Iterator<Item = Either<A, B>>, A, B>
     /// Creates an iterator that filters for right.
     fn into_right(self: Box<Self>) -> RightFilterIter<I, A, B> {
         RightFilterIter {
-            iter: *self,
+            iter: self.iter,
             _l: std::marker::PhantomData,
             _r: std::marker::PhantomData,
         }
     }
 }
 
-impl<A, B> DynChoice<Vec<A>, Vec<B>> for Vec<Either<A, B>> {
+impl<A, B> DynChoice for Vec<Either<A, B>> {
+    type Left = Vec<A>;
+    type Right = Vec<B>;
+
     fn into_left(self: Box<Self>) -> Vec<A> {
-        (*self).into_iter().left().collect()
+        IterChoice::new((*self).into_iter()).left().collect()
     }
 
     fn into_right(self: Box<Self>) -> Vec<B> {
-        (*self).into_iter().right().collect()
+        IterChoice::new((*self).into_iter()).right().collect()
     }
 }
 
-impl<A, B> DynChoice<Box<[A]>, Box<[B]>> for Box<[Either<A, B>]> {
+impl<A, B> DynChoice for Box<[Either<A, B>]> {
+    type Left = Box<[A]>;
+    type Right = Box<[B]>;
+
     fn into_left(self: Box<Self>) -> Box<[A]> {
         (*self).into_vec().left().into_boxed_slice()
     }
@@ -157,20 +179,21 @@ impl<A, B> DynChoice<Box<[A]>, Box<[B]>> for Box<[Either<A, B>]> {
     }
 }
 
-impl<T, A, B> Choice<A, B> for T
+impl<T> Choice for T
 where
-    T: DynChoice<A, B> + Sized,
+    T: DynChoice + Sized,
 {
-    fn left(self: Self) -> A {
+    fn left(self: Self) -> T::Left {
         Box::new(self).into_left()
     }
 
-    fn right(self: Self) -> B {
+    fn right(self: Self) -> T::Right {
         Box::new(self).into_right()
     }
 }
 
 /// Stores a DynChoice with indirection so that Choice can be implemented
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub struct BoxedChoice<C: ?Sized> {
     choice: Box<C>,
 }
@@ -181,17 +204,21 @@ impl<C: ?Sized> BoxedChoice<C> {
     }
 }
 
-impl<A, B, C: ?Sized + DynChoice<A, B>> DynChoice<A, B> for BoxedChoice<C> {
-    fn into_left(self: Box<Self>) -> A {
+impl<C: ?Sized + DynChoice> DynChoice for BoxedChoice<C> {
+    type Left = C::Left;
+    type Right = C::Right;
+
+    fn into_left(self: Box<Self>) -> C::Left {
         self.choice.into_left()
     }
 
-    fn into_right(self: Box<Self>) -> B {
+    fn into_right(self: Box<Self>) -> C::Right {
         self.choice.into_right()
     }
 }
 
 /// A choice with both branches identical.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub struct Same<A> {
     val: A,
 }
@@ -203,7 +230,10 @@ impl<A> Same<A> {
     }
 }
 
-impl<A> DynChoice<A, A> for Same<A> {
+impl<A> DynChoice for Same<A> {
+    type Left = A;
+    type Right = A;
+
     fn into_left(self: Box<Self>) -> A {
         self.val
     }
@@ -214,6 +244,7 @@ impl<A> DynChoice<A, A> for Same<A> {
 }
 
 /// A choice with both branches already inhabited.
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct Both<A, B> {
     left: A,
     right: B,
@@ -226,7 +257,10 @@ impl<A, B> Both<A, B> {
     }
 }
 
-impl<A, B> DynChoice<A, B> for Both<A, B> {
+impl<A, B> DynChoice for Both<A, B> {
+    type Left = A;
+    type Right = B;
+
     fn into_left(self: Box<Self>) -> A {
         self.left
     }
@@ -237,6 +271,7 @@ impl<A, B> DynChoice<A, B> for Both<A, B> {
 }
 
 /// A choice using with lazy expressions.
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct Lazy<A, B, F: FnOnce() -> A, G: FnOnce() -> B> {
     left: F,
     right: G,
@@ -249,7 +284,10 @@ impl<A, B, F: FnOnce() -> A, G: FnOnce() -> B> Lazy<A, B, F, G> {
     }
 }
 
-impl<A, B, F: FnOnce() -> A, G: FnOnce() -> B> DynChoice<A, B> for Lazy<A, B, F, G> {
+impl<A, B, F: FnOnce() -> A, G: FnOnce() -> B> DynChoice for Lazy<A, B, F, G> {
+    type Left = A;
+    type Right = B;
+
     fn into_left(self: Box<Self>) -> A {
         (self.left)()
     }
@@ -260,6 +298,7 @@ impl<A, B, F: FnOnce() -> A, G: FnOnce() -> B> DynChoice<A, B> for Lazy<A, B, F,
 }
 
 /// A choice with a common resource.
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct Exclusive<T, F, G> {
     common: T,
     left: F,
@@ -277,7 +316,10 @@ impl<T, A, B, F: FnOnce(T) -> A, G: FnOnce(T) -> B> Exclusive<T, F, G> {
     }
 }
 
-impl<T, A, B, F: FnOnce(T) -> A, G: FnOnce(T) -> B> DynChoice<A, B> for Exclusive<T, F, G> {
+impl<T, A, B, F: FnOnce(T) -> A, G: FnOnce(T) -> B> DynChoice for Exclusive<T, F, G> {
+    type Left = A;
+    type Right = B;
+
     fn into_left(self: Box<Self>) -> A {
         (self.left)(self.common)
     }
@@ -293,6 +335,7 @@ pub type ExclusiveFn<T, A, B> = Exclusive<T, fn(T) -> A, fn(T) -> B>;
 /// A type with two possile states, `Left` or `Right`.
 ///
 /// It represents a disjunctive union.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub enum Either<A, B> {
     Left(A),
     Right(B),
@@ -381,7 +424,7 @@ impl<A, B> Either<A, B> {
     /// This sequences the either and choice in a way that is unique to their structures.
     pub fn choose_map<C, D, F: FnOnce(A) -> C, G: FnOnce(B) -> D>(
         self,
-        choice: impl Choice<F, G>,
+        choice: impl Choice<Left = F, Right = G>,
     ) -> Either<C, D> {
         match self {
             Either::Left(a) => Either::Left((choice.left())(a)),
@@ -418,7 +461,7 @@ impl<A, B> Either<A, B> {
     /// The composition of an either with its linear negative annihilates both.
     pub fn choose_either<C, F: FnOnce(A) -> C, G: FnOnce(B) -> C>(
         self,
-        choice: impl Choice<F, G>,
+        choice: impl Choice<Left = F, Right = G>,
     ) -> C {
         match self {
             Either::Left(a) => (choice.left())(a),
@@ -439,7 +482,7 @@ impl<A, B> Either<A, B> {
 
     /// Converts a choice of consumers into a consumer of an either.
     pub fn distribute<C, F: FnOnce(A) -> C, G: FnOnce(B) -> C>(
-        choice: impl Choice<F, G>,
+        choice: impl Choice<Left = F, Right = G>,
     ) -> impl FnOnce(Either<A, B>) -> C {
         move |either| match either {
             Either::Left(a) => choice.left()(a),
@@ -456,6 +499,14 @@ impl<A> Either<A, A> {
 }
 
 #[cfg(test)]
-pub mod test {
+mod test {
     use super::*;
+
+    #[test]
+    fn vibe_check() {
+        let a = Both::new(0, 1);
+        let b = Both::new(2, 3);
+        let ab = (a, b.swap());
+        assert_eq!(ab.left(), (0, 3))
+    }
 }
