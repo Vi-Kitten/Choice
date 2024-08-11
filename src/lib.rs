@@ -55,10 +55,10 @@ pub trait Choice: DynChoice + Sized {
     /// Composes a choice of values with a choice of functions to produce a choice of values.
     ///
     /// This sequences the choices in a way that is unique to the structure of a choice.
-    fn choose_map<U: Choice, C, D>(self, choice: U) -> ChooseMap<Self, U>
+    fn choose_map<T: Choice, C, D>(self, choice: T) -> ChooseMap<Self, T>
     where
-        U::Left: FnOnce(Self::Left) -> C,
-        U::Right: FnOnce(Self::Right) -> D,
+        T::Left: FnOnce(Self::Left) -> C,
+        T::Right: FnOnce(Self::Right) -> D,
     {
         ChooseMap {
             choice: self,
@@ -419,7 +419,7 @@ impl<A, B> Either<A, B> {
         self.choose_map(Both::new(left, right))
     }
 
-    /// Composes an either with a choice of functions to produce an either of results.
+    /// Composes an either with a choice of functions to produce an either of values.
     ///
     /// This sequences the either and choice in a way that is unique to their structures.
     pub fn choose_map<C, D, F: FnOnce(A) -> C, G: FnOnce(B) -> D>(
@@ -430,6 +430,13 @@ impl<A, B> Either<A, B> {
             Either::Left(a) => Either::Left((choice.left())(a)),
             Either::Right(b) => Either::Right((choice.right())(b)),
         }
+    }
+
+    /// Composes an either with a choice of values to produce an either of values.
+    ///
+    /// This sequences the either and choice in a way that is unique to their structures.
+    pub fn compose<C, D>(self, choice: impl Choice<Left = C, Right = D>) -> Either<(A, C), (B, D)> {
+        self.choose_map(choice.map_both(|c| move |a| (a, c), |d| move |b| (b, d)))
     }
 
     /// Maps the left if present to create a new either.
@@ -503,10 +510,164 @@ mod test {
     use super::*;
 
     #[test]
-    fn vibe_check() {
+    fn test_swap() {
         let a = Both::new(0, 1);
         let b = Both::new(2, 3);
         let ab = (a, b.swap());
         assert_eq!(ab.left(), (0, 3))
+    }
+
+    #[test]
+    fn test_either_map() {
+        let mut a = Either::Left(0);
+        a = a.map_right(|x: i32| x + 1);
+        assert_eq!(a.as_ref(), Either::Left(&0));
+        a = a.map_left(|x: i32| x + 1);
+        assert_eq!(a.as_ref(), Either::Left(&1));
+        a = a.map_either(|x| x * 2, |x| x * 3);
+        assert_eq!(a, Either::Left(2));
+
+        let mut b = Either::Right(0);
+        b = b.map_left(|x: i32| x + 1);
+        assert_eq!(b.as_ref(), Either::Right(&0));
+        b = b.map_right(|x: i32| x + 1);
+        assert_eq!(b.as_ref(), Either::Right(&1));
+        b = b.map_either(|x| x * 2, |x| x * 3);
+        assert_eq!(b, Either::Right(3))
+    }
+
+    #[test]
+    fn test_choice_map() {
+        let a = Both::new(1, -1).map_right(|x: i32| x - 1);
+        assert_eq!(a.left(), 1);
+        assert_eq!(a.right(), -2);
+        let a = a.map_left(|x: i32| x + 1);
+        assert_eq!(a.left(), 2);
+        assert_eq!(a.right(), -2);
+        let a = a.map_both(|x| x * 2, |x| x * 3);
+        assert_eq!(a.left(), 4);
+        assert_eq!(a.right(), -6)
+    }
+
+    #[test]
+    fn test_composition() {
+        let a = Both::new(0, 1).choose_map(Both::new(|x| x + 1, |x| x - 1));
+        assert_eq!(a.left(), 1);
+        assert_eq!(a.right(), 0);
+        assert_eq!(
+            Both::new(0, 1).choose(Either::<fn(i32) -> i32, fn(i32) -> i32>::Left(
+                |x: i32| x + 1
+            )),
+            1
+        );
+        assert_eq!(
+            Both::new(0, 1).choose(Either::<fn(i32) -> i32, fn(i32) -> i32>::Right(
+                |x: i32| x - 1
+            )),
+            0
+        )
+    }
+
+    #[test]
+    fn test_bind() {
+        fn test_left(a: Either<i32, i32>, b: Either<i32, i32>) -> Either<i32, i32> {
+            a.bind_left(|x| b.map_left(move |y| x + y))
+        }
+        assert_eq!(test_left(Either::Left(1), Either::Left(2)), Either::Left(3));
+        assert_eq!(
+            test_left(Either::Left(1), Either::Right(-2)),
+            Either::Right(-2)
+        );
+        assert_eq!(
+            test_left(Either::Right(-1), Either::Left(2)),
+            Either::Right(-1)
+        );
+        assert_eq!(
+            test_left(Either::Right(-1), Either::Right(-2)),
+            Either::Right(-1)
+        );
+        fn test_right(a: Either<i32, i32>, b: Either<i32, i32>) -> Either<i32, i32> {
+            a.bind_right(|x| b.map_right(move |y| x + y))
+        }
+        assert_eq!(
+            test_right(Either::Right(-1), Either::Right(-2)),
+            Either::Right(-3)
+        );
+        assert_eq!(
+            test_right(Either::Right(-1), Either::Left(2)),
+            Either::Left(2)
+        );
+        assert_eq!(
+            test_right(Either::Left(1), Either::Right(-2)),
+            Either::Left(1)
+        );
+        assert_eq!(
+            test_right(Either::Left(1), Either::Left(2)),
+            Either::Left(1)
+        )
+    }
+
+    #[test]
+    fn test_cobind() {
+        let a = Both::new(1, -1);
+        assert_eq!(a.cobind_left(|x| x.left()).left(), 1);
+        assert_eq!(a.cobind_left(|x| x.left()).right(), -1);
+        assert_eq!(a.cobind_left(|x| x.right()).left(), -1);
+        assert_eq!(a.cobind_left(|x| x.right()).right(), -1);
+        assert_eq!(a.cobind_right(|x| x.left()).left(), 1);
+        assert_eq!(a.cobind_right(|x| x.left()).right(), 1);
+        assert_eq!(a.cobind_right(|x| x.right()).left(), 1);
+        assert_eq!(a.cobind_right(|x| x.right()).right(), -1)
+    }
+
+    #[test]
+    fn test_filtering() {
+        let a: Vec<Either<i32, i32>> = vec![
+            Either::Left(0),
+            Either::Right(1),
+            Either::Left(2),
+            Either::Right(3),
+            Either::Left(4),
+        ];
+        assert_eq!(
+            IterChoice::new(a.iter().map(|x| x.as_ref()))
+                .left()
+                .map(|x| x.clone())
+                .collect::<Vec<i32>>(),
+            vec![0, 2, 4]
+        );
+        assert_eq!(
+            IterChoice::new(a.iter().map(|x| x.as_ref()))
+                .right()
+                .map(|x| x.clone())
+                .collect::<Vec<i32>>(),
+            vec![1, 3]
+        );
+        assert_eq!(a.clone().left(), vec![0, 2, 4]);
+        assert_eq!(a.right(), vec![1, 3]);
+    }
+
+    #[test]
+    fn test_factor_distribute() {
+        assert_eq!(
+            Either::<i32, i32>::factor(std::convert::identity).left()(0),
+            Either::Left(0)
+        );
+        assert_eq!(
+            Either::<i32, i32>::factor(std::convert::identity).right()(1),
+            Either::Right(1)
+        );
+        assert_eq!(
+            Either::<i32, i32>::distribute(Either::<i32, i32>::factor(std::convert::identity))(
+                Either::Left(0)
+            ),
+            Either::Left(0)
+        );
+        assert_eq!(
+            Either::<i32, i32>::distribute(Either::<i32, i32>::factor(std::convert::identity))(
+                Either::Right(1)
+            ),
+            Either::Right(1)
+        );
     }
 }
